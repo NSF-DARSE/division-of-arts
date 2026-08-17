@@ -2,9 +2,11 @@
 """Search the web using the DuckDuckGo API (ddgs package).
 
 Usage:
-    env/bin/python duck_search.py "your query here" [...more queries]
-    env/bin/python duck_search.py --sites-file sites.txt "Delaware arts"
-    env/bin/python duck_search.py -o results.txt -s sites.txt "Delaware arts"
+    python duck_search.py "your query here" [...more queries]
+    python duck_search.py --sites-file sites.txt "Delaware arts"
+    python duck_search.py -o results.txt -s sites.txt "Delaware arts"
+
+Requires the `ddgs` package (install with: pip install -r requirements.txt).
 
 With --sites-file, each query is run against every site in the file, one
 website at a time (serially). Each query must be approved once (y/N) before
