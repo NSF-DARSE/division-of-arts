@@ -265,8 +265,8 @@ def main() -> int:
         help="Seconds to wait between site queries (default: 3.0)",
     )
     parser.add_argument(
-        "--retries", type=int, default=3,
-        help="Retries per site for transient failures (timeout/rate limit) (default: 3)",
+        "--retries", type=int, default=1,
+        help="Retries per site for transient failures (timeout/rate limit) (default: 1)",
     )
     parser.add_argument(
         "--retry-delay", type=float, default=3.0,

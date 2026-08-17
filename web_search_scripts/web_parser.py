@@ -2,9 +2,10 @@
 """Module for fetching and parsing webpages.
 
 This module provides functionality to fetch a webpage's HTML, parse it into readable
-text content, and store both in an SQLite database. It handles potential errors,
-ensures data integrity, and utilizes the `requests` and `BeautifulSoup` libraries
-for web scraping.
+text content, and store both in an SQLite database. Requests are sent with
+browser-like headers and a rotating User-Agent pool to avoid 403 blocks. It handles
+potential errors, ensures data integrity, and utilizes the `requests` and
+`BeautifulSoup` libraries for web scraping.
 
 Functions:
     fetch_page(url): Fetches the HTML content of a webpage.
@@ -21,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import random
 import sqlite3
 import sys
 from pathlib import Path
@@ -31,19 +33,51 @@ from bs4 import BeautifulSoup
 
 DEFAULT_DB_PATH = Path("web_data/parsed_pages.db")
 
+# Rotating pool of realistic browser User-Agents; using the default
+# `python-requests/x.y` User-Agent is an easy way to get blocked with a 403.
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+]
 
-def fetch_page(url: str, timeout: float = 30.0) -> str | None:
-    """Fetch the HTML content of a webpage.
+# Browser-like request headers. `requests` alone only sends `User-Agent:
+# python-requests/x.y`; real browsers send a full header set, and many servers
+# (or WAFs in front of them) reject clients that look like scripts.
+BROWSER_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
+}
+
+
+def browser_headers() -> dict[str, str]:
+    """Return the browser-like header set with a randomly rotated User-Agent."""
+    return {**BROWSER_HEADERS, "User-Agent": random.choice(USER_AGENTS)}
+
+
+def fetch_page(url: str, timeout: float = 60.0) -> str | None:
+    """Fetch the HTML content of a webpage using browser-like headers.
 
     Args:
         url (str): URL of the webpage to fetch.
-        timeout (float): Seconds to wait for a server response (default: 30).
+        timeout (float): Seconds to wait for a server response (default: 60).
 
     Returns:
         str: HTML content of the webpage, or None if an error occurs.
     """
     try:
-        response = requests.get(url, timeout=timeout)
+        response = requests.get(url, timeout=timeout, headers=browser_headers())
         response.raise_for_status()
         return response.text
     except requests.RequestException as exc:
