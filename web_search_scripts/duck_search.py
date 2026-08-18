@@ -5,6 +5,9 @@ Usage:
     python duck_search.py "your query here" [...more queries]
     python duck_search.py --sites-file sites.txt "Delaware arts"
     python duck_search.py -o results.txt -s sites.txt "Delaware arts"
+    python duck_search.py -x 2025,2024 "Delaware arts"
+    python duck_search.py --list-backends
+    python duck_search.py --verbose "Delaware arts"
 
 Requires the `ddgs` package (install with: pip install -r requirements.txt).
 
@@ -12,30 +15,98 @@ With --sites-file, each query is run against every site in the file, one
 website at a time (serially). Each query must be approved once (y/N) before
 any search is sent; the approved query is then reused for all sites. Transient
 failures (timeouts / rate limits) are retried with backoff. Output is grouped
-by website.
+by website. When a search fails, the true underlying ddgs error is reported (not a
+generic message), and `--verbose` shows ddgs's own diagnostics.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
 from ddgs import DDGS, exceptions
 
 
+def configure_ddgs_logging(verbose: bool) -> None:
+    """Forward ddgs diagnostics to stderr.
+
+    ddgs logs useful details (e.g. 'backend does not exist or is disabled',
+    'using auto', 'Error in engine X: ...') but attaches a NullHandler by
+    default, so nothing is shown. Wire a stderr handler so the true reason for a
+    failed or filtered search is visible.
+    """
+    logger = logging.getLogger("ddgs")
+    logger.setLevel(logging.DEBUG if verbose else logging.WARNING)
+    for h in list(logger.handlers):
+        if isinstance(h, logging.NullHandler):
+            logger.removeHandler(h)
+    if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("ddgs: %(levelname)s: %(message)s"))
+        logger.addHandler(handler)
+
+
+def available_text_backends() -> list[str]:
+    """Return the text-search backends available in the installed ddgs package."""
+    try:
+        from ddgs import engines
+
+        keys = list(engines.ENGINES.get("text", {}).keys())
+    except Exception:
+        keys = []
+    return sorted(keys)
+
+
+def describe_ddgs_exception(exc: BaseException) -> str:
+    """Render a ddgs exception with its full, unwrapped detail.
+
+    ddgs frequently wraps the real underlying error inside the exception (e.g.
+    DDGSException(ValueError('HTTP 502 ...'))), which a plain str() can hide.
+    This walks args and chained causes to expose the true error.
+    """
+    seen_ids: set[int] = set()
+    seen_msgs: set[str] = set()
+    lines: list[str] = []
+
+    def walk(ex: BaseException) -> None:
+        if id(ex) in seen_ids:
+            return
+        seen_ids.add(id(ex))
+        msg = str(ex).strip()
+        rendered = f"{type(ex).__name__}: {msg}" if msg else type(ex).__name__
+        if rendered in seen_msgs:
+            return
+        seen_msgs.add(rendered)
+        lines.append(rendered)
+        for arg in ex.args:
+            if isinstance(arg, BaseException):
+                walk(arg)
+        if ex.__cause__ is not None:
+            walk(ex.__cause__)
+        elif ex.__context__ is not None:
+            walk(ex.__context__)
+
+    walk(exc)
+    return " | ".join(lines)
+
+
 def search(
     query: str,
     max_results: int,
     region: str = "us-en",
-    backend: str = "google",
+    backend: str = "auto",
+    timeout: int = 60,
 ) -> list[dict]:
     """Return a list of {title, href, body} dicts for a web search."""
     results = []
-    with DDGS() as ddgs:
+    with DDGS(timeout=timeout) as ddgs:
         for r in ddgs.text(
             query,
             region=region,
@@ -80,6 +151,33 @@ def build_site_query(query: str, domain: str) -> str:
     return f"({query}) (site:{domain})"
 
 
+def parse_keywords(values: list[str] | None) -> list[str]:
+    """Normalize repeatable, comma-separated keyword argument values."""
+    keywords: list[str] = []
+    for value in values or []:
+        for kw in value.split(","):
+            kw = kw.strip()
+            if kw:
+                keywords.append(kw)
+    return keywords
+
+
+def filter_by_keywords(
+    results: list[dict], keywords: list[str]
+) -> list[dict]:
+    """Drop results whose title or snippet contains any keyword (case-insensitive)."""
+    if not keywords:
+        return results
+    lowered = [kw.lower() for kw in keywords]
+    kept = []
+    for r in results:
+        text = " ".join((r.get("title", ""), r.get("body", ""))).lower()
+        if any(kw in text for kw in lowered):
+            continue
+        kept.append(r)
+    return kept
+
+
 def confirm_query(query: str, domains: list[str]) -> bool:
     """Show a confirmation page and require explicit approval before sending."""
     lines = [
@@ -113,21 +211,70 @@ def search_with_retries(
     region: str,
     retries: int,
     retry_delay: float,
-    backend: str = "google",
+    backend: str = "auto",
+    timeout: int = 60,
 ) -> list[dict]:
-    """Run a search, retrying transient failures (timeout / rate limit)."""
+    """Run a search, retrying transient failures (timeout / rate limit / empty results)."""
     for attempt in range(1, retries + 2):
         try:
-            return search(query, max_results, region, backend=backend)
-        except (exceptions.TimeoutException, exceptions.RatelimitException) as exc:
-            if attempt > retries:
+            return search(query, max_results, region, backend=backend, timeout=timeout)
+        except exceptions.DDGSException as exc:
+            if not is_transient_error(exc) or attempt > retries:
                 raise
             print(
                 f"     retry {attempt}/{retries} after {exc}...",
                 file=sys.stderr,
             )
             time.sleep(retry_delay * attempt)
-    return []
+    raise exceptions.DDGSException(f"search failed for query: {query!r}")
+
+
+def is_transient_error(exc: BaseException) -> bool:
+    """Return True when a ddgs error is likely transient and worth retrying.
+
+    Throttled backends often surface as empty result sets, which ddgs reports
+    as a plain "No results found." exception rather than a dedicated
+    RatelimitException. Treat both forms as retryable.
+    """
+    if isinstance(exc, (exceptions.TimeoutException, exceptions.RatelimitException)):
+        return True
+    return "no results" in str(exc).lower()
+
+
+def query_site(
+    index: int,
+    total: int,
+    query: str,
+    domain: str,
+    max_results: int,
+    region: str,
+    delay: float,
+    retries: int,
+    retry_delay: float,
+    backend: str,
+    timeout: int,
+) -> tuple[str, list[dict] | None, str | None]:
+    """Run `query` against one site; return (domain, results, error_detail)."""
+    site_query = build_site_query(query, domain)
+    print(
+        f"  -> querying site {index}/{total}: {domain}",
+        file=sys.stderr,
+    )
+    try:
+        found = search_with_retries(
+            site_query, max_results, region, retries, retry_delay, backend, timeout
+        )
+    except exceptions.DDGSException as exc:
+        err_detail = describe_ddgs_exception(exc)
+        print(f"     ERROR: {err_detail}", file=sys.stderr)
+        return domain, None, err_detail
+    except Exception as exc:  # defensive catch-all
+        err_detail = describe_ddgs_exception(exc)
+        print(f"     ERROR: {err_detail}", file=sys.stderr)
+        return domain, None, err_detail
+    if delay:
+        time.sleep(delay)
+    return domain, found, None
 
 
 def collect_site_results(
@@ -138,37 +285,46 @@ def collect_site_results(
     delay: float,
     retries: int,
     retry_delay: float,
-    backend: str = "google",
+    backend: str = "auto",
+    timeout: int = 60,
+    workers: int = 1,
 ) -> tuple[list[tuple[str, list[dict]]], list[tuple[str, str]]]:
-    """Run `query` against each site serially.
+    """Run `query` against each site, up to `workers` at a time.
 
     Returns (per_site_results, errors) where per_site_results is a list of
     (domain, results) pairs in the same order as `domains`.
     """
-    per_site: list[tuple[str, list[dict]]] = []
-    errors: list[tuple[str, str]] = []
-    for i, domain in enumerate(domains, 1):
-        site_query = build_site_query(query, domain)
-        print(
-            f"  -> querying site {i}/{len(domains)}: {domain}",
-            file=sys.stderr,
+    total = len(domains)
+    n_workers = max(1, min(workers, total))
+
+    def run_one(args: tuple[int, str]) -> tuple[str, list[dict] | None, str | None]:
+        i, domain = args
+        return query_site(
+            i, total, query, domain, max_results, region, delay,
+            retries, retry_delay, backend, timeout,
         )
-        try:
-            found = search_with_retries(
-                site_query, max_results, region, retries, retry_delay, backend
-            )
-        except exceptions.DDGSException as exc:
-            errors.append((domain, str(exc)))
-            print(f"     ERROR: {exc}", file=sys.stderr)
-            continue
-        except Exception as exc:  # defensive catch-all
-            errors.append((domain, str(exc)))
-            print(f"     ERROR: {exc}", file=sys.stderr)
-            continue
-        per_site.append((domain, found))
-        if delay and i < len(domains):
-            time.sleep(delay)
+
+    if n_workers == 1:
+        outcomes = [run_one((i, domain)) for i, domain in enumerate(domains, 1)]
+    else:
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            outcomes = list(pool.map(run_one, enumerate(domains, 1)))
+
+    per_site = [(d, found) for d, found, _ in outcomes if found is not None]
+    errors = [(d, detail) for d, _, detail in outcomes if detail is not None]
     return per_site, errors
+
+
+def effective_workers(requested: int | None, n_sites: int) -> int:
+    """Return the worker count to use for a site list.
+
+    When `requested` is None, default to the machine's CPU count minus 4 (never
+    below 1), without exceeding the number of sites. An explicit value is used
+    as-is (still capped at the number of sites).
+    """
+    if requested is None:
+        requested = max(1, (os.cpu_count() or 1) - 4)
+    return max(1, min(requested, n_sites))
 
 
 def render_results(
@@ -235,7 +391,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Search the web via DuckDuckGo and print results."
     )
-    parser.add_argument("queries", nargs="+", help="Search query or queries")
+    parser.add_argument("queries", nargs="*", help="Search query or queries")
     parser.add_argument(
         "-n", "--max-results", type=int, default=3,
         help="Max results per site (default: 3)",
@@ -245,8 +401,22 @@ def main() -> int:
         help="DuckDuckGo region code (default: us-en)",
     )
     parser.add_argument(
-        "-b", "--backend", default="google",
-        help="Search engine backend (default: google)",
+        "-b", "--backend", default="auto",
+        help="Search engine backend (default: auto)",
+    )
+    parser.add_argument(
+        "-x", "--exclude-keywords", action="append", default=None,
+        metavar="KW",
+        help="Drop results whose title or snippet contains any of these keywords "
+             "(comma-separated; repeatable), e.g. -x 2025,2024",
+    )
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="Show ddgs diagnostics (engine errors, backend fallbacks) on stderr",
+    )
+    parser.add_argument(
+        "--list-backends", action="store_true",
+        help="List the search backends available in the installed ddgs and exit",
     )
     parser.add_argument(
         "-j", "--json", action="store_true",
@@ -273,6 +443,15 @@ def main() -> int:
         help="Base seconds for retry backoff (default: 3.0)",
     )
     parser.add_argument(
+        "--timeout", type=int, default=60,
+        help="Per-request connection timeout in seconds (default: 60)",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=None,
+        help="Number of sites to query in parallel "
+             "(default: system CPU count minus 4, capped at the number of sites)",
+    )
+    parser.add_argument(
         "--parse", action="store_true",
         help="Fetch and parse the resulting webpages, storing HTML and text in SQLite",
     )
@@ -281,6 +460,32 @@ def main() -> int:
         help="Path to the SQLite parsed-pages database (default: web_data/parsed_pages.db)",
     )
     args = parser.parse_args()
+
+    if args.list_backends:
+        print("Available ddgs text backends:")
+        for name in available_text_backends():
+            print(f"  - {name}")
+        return 0
+
+    if not args.queries:
+        parser.error("the following arguments are required: queries")
+
+    configure_ddgs_logging(args.verbose)
+
+    requested = [
+        b.strip()
+        for b in (args.backend or "").split(",")
+        if b.strip()
+    ]
+    available = set(available_text_backends())
+    missing = [b for b in requested if b not in available and b not in ("auto", "all")]
+    if missing and requested:
+        print(
+            f"WARNING: backend(s) {', '.join(missing)} are not available in the "
+            "installed ddgs and will silently fall back to 'auto'. "
+            f"Available: {', '.join(available_text_backends())}.",
+            file=sys.stderr,
+        )
 
     domains: list[str] = []
     if args.sites_file:
@@ -307,6 +512,13 @@ def main() -> int:
                 continue
 
             if domains:
+                workers = effective_workers(args.workers, len(domains))
+                if args.workers is None:
+                    print(
+                        f"  using {workers} worker(s) for {len(domains)} site(s) "
+                        f"(CPU count {os.cpu_count() or '?'} minus 4)",
+                        file=sys.stderr,
+                    )
                 per_site, errors = collect_site_results(
                     query,
                     domains,
@@ -316,17 +528,36 @@ def main() -> int:
                     args.retries,
                     args.retry_delay,
                     args.backend,
+                    args.timeout,
+                    workers,
                 )
             else:
                 try:
                     results = search_with_retries(
-                        query, args.max_results, args.region, args.retries, args.retry_delay, args.backend
+                        query, args.max_results, args.region, args.retries, args.retry_delay, args.backend, args.timeout
                     )
                     per_site, errors = [("(all)", results)], []
                 except exceptions.DDGSException as exc:
-                    per_site, errors = [], [(query, str(exc))]
+                    per_site, errors = [], [(query, describe_ddgs_exception(exc))]
                 except Exception as exc:
-                    per_site, errors = [], [(query, str(exc))]
+                    per_site, errors = [], [(query, describe_ddgs_exception(exc))]
+
+            exclude_keywords = parse_keywords(args.exclude_keywords)
+            if exclude_keywords:
+                dropped = 0
+                filtered: list[tuple[str, list[dict]]] = []
+                for domain, results in per_site:
+                    kept = filter_by_keywords(results, exclude_keywords)
+                    dropped += len(results) - len(kept)
+                    filtered.append((domain, kept))
+                per_site = filtered
+                if dropped:
+                    print(
+                        "  dropped "
+                        f"{dropped} result(s) containing exclude keywords: "
+                        f"{', '.join(exclude_keywords)}",
+                        file=sys.stderr,
+                    )
 
             out = stream or sys.stdout
             if args.json:
