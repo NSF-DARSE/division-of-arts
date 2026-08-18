@@ -193,6 +193,44 @@ def render_results(
         stream.write(f"\n-- {domain} --\n  ERROR: {err}\n")
 
 
+def parse_results(
+    per_site: list[tuple[str, list[dict]]],
+    db_path: Path,
+) -> int:
+    """Fetch and parse the unique result webpages from a search into SQLite.
+
+    Args:
+        per_site: (domain, results) pairs from a search.
+        db_path: Path to the SQLite parsed-pages database.
+
+    Returns:
+        int: Number of webpages successfully parsed and stored.
+    """
+    try:
+        from web_parser import parse_urls
+    except ImportError as exc:
+        print(
+            "ERROR: --parse requires 'requests' and 'beautifulsoup4' "
+            "(install with: pip install -r requirements.txt)",
+            file=sys.stderr,
+        )
+        raise
+
+    urls = sorted(
+        {
+            r["href"]
+            for _, results in per_site
+            for r in results
+            if r.get("href")
+        }
+    )
+    if not urls:
+        print("  (no result URLs to parse)", file=sys.stderr)
+        return 0
+    print(f"\n  parsing {len(urls)} unique result webpage(s)...", file=sys.stderr)
+    return parse_urls(urls, db_path=db_path)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Search the web via DuckDuckGo and print results."
@@ -227,12 +265,20 @@ def main() -> int:
         help="Seconds to wait between site queries (default: 3.0)",
     )
     parser.add_argument(
-        "--retries", type=int, default=3,
-        help="Retries per site for transient failures (timeout/rate limit) (default: 3)",
+        "--retries", type=int, default=1,
+        help="Retries per site for transient failures (timeout/rate limit) (default: 1)",
     )
     parser.add_argument(
         "--retry-delay", type=float, default=3.0,
         help="Base seconds for retry backoff (default: 3.0)",
+    )
+    parser.add_argument(
+        "--parse", action="store_true",
+        help="Fetch and parse the resulting webpages, storing HTML and text in SQLite",
+    )
+    parser.add_argument(
+        "--parse-db", type=Path, default=Path("web_data/parsed_pages.db"),
+        help="Path to the SQLite parsed-pages database (default: web_data/parsed_pages.db)",
     )
     args = parser.parse_args()
 
@@ -297,6 +343,9 @@ def main() -> int:
                 continue
 
             render_results(query, per_site, errors, out)
+
+            if args.parse:
+                parse_results(per_site, args.parse_db)
         return 0
     finally:
         if stream:

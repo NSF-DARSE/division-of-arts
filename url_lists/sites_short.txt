@@ -1,0 +1,8 @@
+# Short site list for quick tests (subset of sites.txt).
+delart.org
+https://www.thebiggsmuseum.org/
+https://candlelighttheatredelaware.org/
+www.ccarts.org
+https://diae.org/
+https://www.delawaretheatre.org/
+https://www.thegrandwilmington.org/
