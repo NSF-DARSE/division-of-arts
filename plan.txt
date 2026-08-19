@@ -1,0 +1,127 @@
+I am working on a problem, and below is the problem, what are our goals, and how we want to achieve them, if you think there is a better way of solving it, go ahead, and document in .md file, the new process if you choose to pivot from my plan.
+Information on Case Study
+1.	Area of focus of the case study: Artificial intelligence-assisted web scraping and event aggregation for arts and culture calendar management in the public sector. Specifically, this case study focuses on building an intelligent, multi-source event discovery pipeline that automatically surfaces relevant arts and culture events occurring in the State of Delaware and compares them against an existing public-facing events calendar to eliminate duplication. The output would be a list that could be imported into DelawareScene.com through a bulk import tool, or done via a human.
+2.	Provide a short abstract about the case study (100 words): The Delaware Division of the Arts (DDOA) operates DelawareScene.com, a statewide arts and culture events calendar intended to serve as a comprehensive public resource. Keeping the calendar current is a labor-intensive, manual process that depends on the Division’s grantee organizations to submit their events as announced. This case study challenges participants to design and prototype an AI-powered event scraping system capable of discovering arts and culture events from four distinct source categories: (1) DDOA-funded grantee websites, (2) non-grantee Delaware venues and presenters, (3) public library programming (such as literature, speakers, and arts), and (4) government-sponsored festivals and events. The system should intelligently filter for relevance, normalize event data into a consistent schema, and cross-reference results against the live DelawareScene.com calendar, returning only net-new events not yet listed. A successful prototype would dramatically reduce staff time spent on calendar curation while increasing the volume and diversity of events surfaced for Delaware audiences.
+3.	Three clear, deliverable goals we want to achieve. 
+
+Goal 1: Build a functional multi-source event scraper
+Develop a working prototype that can crawl and extract event data from at least the first two of the four source tiers below. Each tier represents a distinct scraping challenge:
+    Tier 1 — DDOA Grantee Websites: Scrape event listings from a provided list of ~60+ grantee organization websites. These sites vary widely in structure (WordPress, Squarespace, custom CMS, etc.).
+    Tier 2 — Non-Grantee Delaware Arts & Culture Events: Identify and extract events from arts venues, galleries, theaters, and presenters operating within Delaware but not receiving DDOA grant funding. This tier requires broader discovery logic, potentially using geographic filtering, keyword matching, or known venue registries.
+    Tier 3 — Delaware Public Library Events: Scrape event listings from public library systems across the state, applying filters to surface programs relevant to arts and culture audiences: author talks, art classes, literary events, speaker series, film screenings, and similar programming. Not all library events are in scope (e.g., story time, job fairs).
+    Tier 4 — Government & Public Festival Events: Identify arts-relevant events and festivals hosted by Delaware state agencies, county governments, municipalities, and public entities (e.g., state fair, arts in the park programs, cultural festivals sponsored by the City of Wilmington or Town of Lewes).
+
+We have a dataset of all the entities we care about and saved them in the assets/websites.csv
+
+
+Goal 2: Normalize and structure extracted event data
+Design and implement a data schema that normalizes events from diverse sources into a consistent, usable format. At minimum, the schema should capture:
+    Event name / title
+    Presenting organization
+    Location (venue name, address, city)
+    Date(s) and time(s).  If a range, provide range (ex. August 2-14)
+    Event category / discipline (can provide an existing list of categories used)
+    URL / source link for more information
+    URL / source link to buy tickets
+    Phone number for the public to call for questions or purchases
+    Description or summary
+    Admission cost (free / ticketed )
+
+Goal 3: Implement a deduplication check against DelawareScene.com
+Build a cross-reference module that compares the scraper’s output against the current live listings on DelawareScene.com (or a provided export of existing calendar data), flagging or suppressing any events already listed. The final output should contain only net-new events not yet appearing on the calendar - ready for staff review and import.
+We have the catalog of the events that were submitted from october 1st, can we compare with these, those are saved under assets/submitted_events.csv
+
+This is our plan of implementing the whole thing
+
+We already have the urls collected from Tier 1-Tier 4 using google search, assets/websites.csv
+We will have 1 agent work on the fetching of websites
+It will check if the current URLS are still good, 
+    if not it will search for the entities names from the data, and get the updated urls
+Then it will search for the public arts events in DE, and get the a new list of urls, use google search api if you can, else use duck-duck-go
+check if these new URLS are present in our websites.csv , if not add them, we also want to find if they have a events page in the websites, add that to the .csv file too, like we have for all of the previous ones
+
+Agent 2 will do the scrapping of the urls present in our dataset, first it will scrap the events page if present, if not it will scrap the events or calender elements and get the info about the events, get all the present info about each event,
+save the events in a format which is good, sql lite or whatever works the best, make sure these events are not redundant or repeating, and check with the already posted events in the calender assets/submitted_events.csv
+
+Also create a scratch website that, mimics DelawareScences.com, which can mimic the uploading part of events, they take excel file
+
+Agent 3 will make sure the data we are put to push on the website follows the guidelines, and pushes it
+These are the guidelines to submit the events on the website, our final evenets should follow these 
+"How to Submit Event Data Using the Spreadsheet
+
+Please use the Excel spreadsheet to submit bulk event data only if your organization has 10 or more scheduled events in the next year. Below are guidelines for completing the spreadsheet. Please send completed spreadsheet as an attachment to andrew.truscott@delaware.gov 
+*Special Note for multi-performance productions: If your event is a has many performance dates, please use one row for all information about the production (venue, presenter, title, description, etc.) then use subsequent rows for each performance filling in these fields only: 
+•	start date/date
+•	start time
+•	buy tickets URL
+
+VenueID: The venue or place that the event is happening. Please use our Directory to make sure the venue location is listed. Please make note of the number the follows the forward slash (/) and add it to VenueID column
+Example: https://www.delawarescene.com/organization/939/alapocas-run-state-park, Alapocas Run State Park = 939
+PresenterID: This is the organization that is hosting this event. Like the VenueID, please make note of the number the follows the forward slash (/) and add it to PresenterID.
+
+Title: The title of the event. 
+Example: Julius Caesar
+
+Categories: Enter the category or subcategory ID into this field. You may select up to 3 categories or subcategories that fit the event. If you select a subcategory, the event will be automatically included in the parent category as well. So if you select the subcategory of “jazz”, you don’t also need to select the parent category of “music.” Please use the ID numbers below to indicate categories, and enter them separated by commas. Example: 4,8,12
+
+Please see list of Category ID #’s on the next page.
+ 
+ID	Category/Subcategory
+1	Attractions
+2	Dance
+3	Festivals & Special Events
+4	Film
+5	Free
+6	Kids & Family Friendly
+7	Lectures & Workshops
+8	Literature & Poetry
+9	Music
+12	Music: Bands
+13	Music: Choral
+14	Music: Classical/Opera
+15	Music: Country/Folk/Bluegrass
+16	Music: Hip Hop/R&B
+17	Music: Jazz/Blues
+18	Music: Rock/Pop
+19	Music: World
+10	Theater & Performance
+20	Theater & Performance: Comedy/Drama
+21	Theater & Performance: Musical
+22	Theater & Performance: Variety
+11	Visual Arts
+23	Visual Arts: Art Centers
+24	Visual Arts: Art, Antiques & Craft Shows
+25	Visual Arts: Art Tours
+26	Visual Arts: Exhibitions
+27	Visual Arts: Galleries
+28	Visual Arts: Museums
+29	Visual Arts: Public Art
+
+
+
+
+URL: This is the website address of the page that has detail information about the event. Please remember to include the http:// or https:// at the beginning. 
+Example:  https://arts.delaware.gov
+
+Box Office Phone: phone number for box office. 
+Example: Enter as XXX-XXX-XXXX 
+
+Low Price and High Price: These will be used to show a range of ticket prices or FREE. Please enter the low and high price (if applicable) into the corresponding columns. Ticket prices must be whole numbers.  Do not include cents.
+Examples: 
+•	28 - 32
+•	18
+•	FREE
+
+*Start Date/Date: Use this field for the date of the event. If it is a one-time event, or for the opening date of an ongoing event like an exhibit.
+Example: MM/DD/YYYY
+
+Start Time: 
+Example, 7:30 p.m.
+
+End Date: Use this field for the end date of an ongoing event, like an exhibit. Leave blank, if the event is not an ongoing event, or a one-date-only event. 
+
+Ticket URL: This will appear as a “Buy Tickets” link on the event page. So, it should be the URL of the buy tickets link from the presenter or venue website. Leave blank if you don’t want the “Buy Tickets” link to display
+Example:  https://arts.delaware.gov/
+
+Description: Please limit to 200 words. Enter the description one time for each venue. 
+* See note at the beginning of this document about multi-performance productions
