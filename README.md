@@ -1,277 +1,290 @@
-# SceneScout — Delaware Arts Event Discovery Pipeline
+# SceneScout
 
-AI-assisted, multi-source event discovery for the Delaware Division of the Arts'
-[DelawareScene.com](https://delawarescene.com) calendar. SceneScout crawls 100+
-Delaware arts sources (grantee websites, non-grantee venues, public libraries,
-government calendars), normalizes everything into one schema, suppresses events
-already listed on DelawareScene, and produces a validated bulk-upload workbook
-ready for staff review. See [PLAN.md](PLAN.md) for the architecture and the
-recon evidence behind it.
+**Finding the Delaware arts events the state calendar never hears about.**
 
-**Design principle: structure-first, LLM-last.** Most sources expose structured
-data (WordPress Events Calendar REST, LibCal JSON, Squarespace JSON, iCal, RSS,
-schema.org JSON-LD) — those are extracted deterministically. The LLM does what
-only it can: reading the genuinely unstructured tail, judging arts-and-culture
-relevance, and assigning DelawareScene category IDs.
+[DelawareScene.com](https://delawarescene.com) is Delaware's public arts and
+culture calendar. It fills up one way: a grantee organization remembers to log
+in and submit an event. If a theater forgets, the show simply isn't on the state
+calendar — and a resident looking for something to do that weekend never learns
+it exists.
 
-## Presentation
+SceneScout goes and finds those events. It crawls 104 Delaware arts sources,
+normalizes everything into one schema, keeps only arts and culture events that
+actually take place in Delaware, drops anything already on the calendar, and
+hands staff a workbook in the exact bulk-upload format DDOA already uses.
 
-`docs/presentation.html` is the seven-minute talk — open it in a browser. Eight
-full-screen sections with timing markers, a pipeline flow diagram, and the
-measured results from a live run.
+On the most recent run: **2,272 events pulled → 991 net-new events**, accepted by
+the upload validator with zero errors.
 
-## Running it
+> **The design in one line:** most of these sites already publish
+> machine-readable events, so 78% of the data is extracted deterministically and
+> the AI is spent only where structure runs out — reading the unstructured tail,
+> judging what belongs on an arts calendar, and assigning categories.
 
-Everything below assumes you are in the repository root. Nothing needs a
-database server, an API key, or network access beyond the sites being scraped.
+`docs/presentation.html` is the seven-minute talk. [PLAN.md](PLAN.md) has the
+architecture and the decision record.
 
-### 1. Set up (once)
+---
+
+## 1. Setup
+
+Python 3.9 or newer. No database server, no API key required.
 
 ```bash
+git clone https://github.com/talhaMah56/division-of-arts
+cd division-of-arts
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Python 3.9 or newer. If `lxml` fails to build, install Xcode command line tools
-(`xcode-select --install`) and retry.
+If `lxml` fails to build on macOS, run `xcode-select --install` and retry.
 
-### 2. See the result without running anything
+## 2. See it working in 30 seconds
 
-The repository ships the output of a full run, so you can look at the
-deliverable straight away:
+The repository ships the output of a full run, so you can look at the result
+before running anything:
 
 ```bash
-.venv/bin/python mock_site/app.py       # then open http://127.0.0.1:5050
+.venv/bin/python mock_site/app.py
 ```
 
-The site starts with DelawareScene's currently-listed events already loaded and
-keeps whatever you upload, so it is ready to demo on first launch.
+Open **http://127.0.0.1:5050**. The calendar is already loaded with the events
+DelawareScene currently lists — see [§5](#5-using-the-website) for what to click.
 
-### 3. Run the pipeline yourself
+## 3. Running the pipeline
+
+One command does everything:
 
 ```bash
 .venv/bin/python -m scenescout run-all
 ```
 
-Roughly 20 minutes without an LLM backend, a few hours with one (the LLM reads
-about 50 unstructured sites and classifies every ambiguous event). It writes
+Expect ~20 minutes with no AI backend, a few hours with one (it reads ~50
+unstructured sites and classifies every ambiguous event). It writes
 `out/scenescout-export-<date>.xlsx` and `out/review-report.html`.
 
-To run it in pieces — each stage is independent and re-runnable:
+Each stage is independent, idempotent, and re-runnable, so you can also step
+through them:
+
+| Command | What it does |
+|---|---|
+| `python -m scenescout scene` | Scrape DelawareScene: the organization directory (→ VenueIDs) and the live calendar (→ dedupe corpus) |
+| `python -m scenescout registry` | Load `assets/websites.csv` and probe each source for its best extraction channel |
+| `python -m scenescout extract` | Pull raw events through eight route workers |
+| `python -m scenescout normalize` | Canonical schema, Delaware gate, relevance and category classification |
+| `python -m scenescout dedupe` | Cross-source dedup, then match against the live calendar |
+| `python -m scenescout export` | Write the bulk-upload workbook and the review report |
+| `python -m scenescout stats` | Show what is in the database right now |
+
+Useful flags:
 
 ```bash
-.venv/bin/python -m scenescout scene       # DelawareScene org IDs + live listings
-.venv/bin/python -m scenescout registry    # load websites.csv, auto-detect routes
-.venv/bin/python -m scenescout extract     # pull raw events (add --workers 4 to parallelise)
-.venv/bin/python -m scenescout normalize   # canonical schema + classification
-.venv/bin/python -m scenescout dedupe      # suppress already-listed events
-.venv/bin/python -m scenescout export      # bulk-upload .xlsx + review report
-.venv/bin/python -m scenescout stats       # what is in the database right now
+python -m scenescout extract --workers 4          # parallelise (IO-bound)
+python -m scenescout extract --routes tribe-rest  # only one channel
+python -m scenescout extract --names "Delaware Art Museum"
+python -m scenescout normalize --llm-budget 1200  # cap AI classification calls
+python -m scenescout scene --days 180             # how far ahead to scrape
 ```
 
-`normalize --llm-budget N` caps classification calls (default 60). Set it above
-the number of events for a definitive run; the review report tells you if the
-budget ran out before every event was judged.
+`--llm-budget` matters: set it above your event count for a definitive run. If
+the budget runs out before every event is judged, the review report says how
+many that affected rather than quietly dropping them.
 
-Two maintenance commands:
+Maintenance and tests:
 
 ```bash
-.venv/bin/python -m scenescout rediscover          # propose URLs for dead sources
-.venv/bin/python -m scenescout rediscover --apply  # write back confirmed matches only
-.venv/bin/python tests/test_pipeline.py            # 37 regression tests, no network
+python -m scenescout rediscover          # propose URLs for sources whose site moved
+python -m scenescout rediscover --apply  # write back only page-verified matches
+python tests/test_pipeline.py            # 37 regression tests, no network, no AI
 ```
 
-### 4. Load the results into the mock site
+## 4. Loading results into the site
 
-Start the site, open http://127.0.0.1:5050, and upload
-`out/scenescout-export-<date>.xlsx` on the **Bulk upload** page. Every row is
-validated against the DDOA submission guidelines; new events are added and
-anything already on the calendar is skipped. Then open **Calendar**.
+```bash
+.venv/bin/python mock_site/app.py
+```
 
-### What you end up with
+Open **http://127.0.0.1:5050**, and on the **Bulk upload** page choose
+`out/scenescout-export-<date>.xlsx`. Every row is validated; new events are
+added and anything already on the calendar is skipped. Then open **Calendar**.
+
+## 5. Using the website
+
+The site is a working stand-in for DDOA's intake, in two pages.
+
+### Bulk upload (`/`)
+
+- **Upload a workbook.** Pick an `.xlsx` in DDOA's 13-column format and press
+  *Upload & validate*.
+- **What you get back.** A summary line — how many events were added, how many
+  skipped as duplicates, how many rejected — plus the running calendar total.
+- **Rejected rows** are listed individually with the reason (bad date format,
+  more than three categories, a price with cents, and so on).
+- **Skipped duplicates** are collapsed into an expandable list, each saying
+  whether it was already on DelawareScene or already imported.
+- **Upload the same file twice** and the second one adds nothing. Duplicate
+  checking runs against the whole calendar using the pipeline's own matcher.
+- **Clear** wipes uploads and re-seeds from DelawareScene's currently-listed
+  export.
+
+### Calendar (`/calendar`)
+
+- **Views.** *Month*, *Week*, and *Day*. Move with the arrow buttons, `←`/`→`,
+  or jump back with *Today* or the `t` key. It opens on today.
+- **Colour.** Events are coloured by discipline — music, theater, visual arts,
+  dance, film, literature, festivals, lectures, kids — and subcategories inherit
+  their parent's colour, so a jazz gig and a choral concert read alike.
+- **Filter by discipline.** Click any legend chip to toggle it. Active chips are
+  filled with their own colour; inactive ones go hollow and grey. *Show all* and
+  *Hide all* are at the end of the legend.
+- **Filter by origin.** *All* / *Already listed* / *Found by SceneScout* — the
+  fastest way to see what the pipeline actually contributed. Events it added
+  carry a doubled left border.
+- **Search.** Filter by title or venue as you type.
+- **Click any event** for its details: dates, admission, categories, VenueID,
+  the source link, and whether it was already listed or newly found.
+- **Multi-day exhibits** appear on every day of their run; all-day events sit in
+  a strip above the timed grid.
+
+Everything you upload is written back to `out/delawarescene-calendar.xlsx`, so
+one file holds the existing listings and everything SceneScout found, together.
+
+## 6. What you end up with
 
 | File | What it is |
 |---|---|
-| `out/scenescout-export-<date>.xlsx` | The deliverable — net-new events in DDOA's 13-column bulk-upload format |
+| `out/scenescout-export-<date>.xlsx` | **The deliverable** — net-new events in DDOA's 13-column bulk-upload format |
 | `out/review-report.html` | Every event that did *not* make the workbook, and why |
-| `out/delawarescene-calendar.xlsx` | The whole calendar: DelawareScene's existing listings plus everything SceneScout added |
+| `out/delawarescene-calendar.xlsx` | The whole calendar: existing listings plus everything SceneScout added |
 | `out/rediscovery-report.json` | Replacement-URL proposals for dead sources |
 | `data/scenescout.db` | Pipeline database — sources, raw events, canonical events, scraped DelawareScene reference data |
 | `data/mock_site.db` | The mock site's calendar |
 
-To start over: delete `data/` for a clean pipeline run, or just
-`data/mock_site.db` to reset the calendar back to DelawareScene's listings.
+To start over, delete `data/` for a clean pipeline run, or just
+`data/mock_site.db` to reset the calendar to DelawareScene's listings.
 
-### LLM backend
+## 7. Repository layout
 
-The extraction/classification LLM resolves in this order:
+```
+scenescout/            the pipeline
+  registry.py          source loading + eight-step route detection
+  http.py              polite fetching: rate limits, robots.txt, cache, curl fallback
+  scene.py             DelawareScene scrapers (org directory, live listings)
+  extract/workers.py   eight route workers
+  normalize.py         canonical schema, relevance gate, categories
+  geo.py               the Delaware-only gate
+  dedupe.py            cross-source dedup + matching against the live calendar
+  export.py            bulk-upload workbook, validators, review report
+  llm.py               AI backends and the deterministic keyword fallback
+  rediscover.py        replacement URLs for sources whose site moved
+mock_site/app.py       upload portal + calendar
+tests/                 37 regression tests
+assets/                curated source registry and DDOA templates/exports
+docs/                  the presentation and the original case-study brief
+prototypes/            early exploration, superseded (see its README)
+```
 
-1. **Anthropic SDK** (`claude-opus-5`) — set `ANTHROPIC_API_KEY` (or log in via
-   `ant auth login`).
-2. **claude CLI** — headless `claude -p`, picked up automatically if Claude Code
-   is installed.
-3. **Rules** — deterministic keyword classifier; no extraction from unstructured
-   HTML, but the rest of the pipeline still works end to end.
+## 8. How the extraction works
 
-Force one with `SCENESCOUT_LLM=anthropic|claude-cli|rules`. `normalize` takes
-`--llm-budget N` to cap classification calls (default 60).
+Each source is probed once and routed to the cheapest channel that actually
+works. Structured channels are parsed exactly; only what is left goes to a model.
 
-## Delaware only
+| Route | Sources | Events |
+|---|---:|---:|
+| The Events Calendar REST API | 15 | 1,370 |
+| HTML read by an AI model | 53 | 479 |
+| Library system JSON (33 branches) | 1 | 315 |
+| Squarespace `?format=json` | 5 | 61 |
+| RSS feeds | 12 | 27 |
+| schema.org JSON-LD | 2 | 10 |
+| iCal exports | 3 | 8 |
+| WordPress custom post types | 7 | 2 |
+| Bot-blocked or dead | 6 | — |
 
-DelawareScene lists events *in Delaware*, but several sources legitimately
-program out of state — the Delaware Academy of Vocal Arts performs in
-Philadelphia and New York, and the Delaware Nature Society runs programs at a
-preserve in Avondale, PA. `geo.py` drops those regardless of how arts-relevant
-they are.
+**1,764 of 2,272 events come from deterministic parsers with no AI calls.**
 
-Every check is anchored to a *position* rather than matched as a substring,
-because the two collide constantly in real addresses:
+### AI backend
 
-- a state token must be the last comma-separated element, optionally followed
-  by a ZIP — otherwise "3120 Barley Mill Rd, **Mt.** Cuba, DE 19807" reads as
-  Montana;
-- a ZIP must follow a state or end the string — Sussex and Kent addresses have
-  five-digit house numbers like "15411 Abbotts Pond Road";
-- localities are compared as whole comma-separated segments — Clear Space
-  Theatre is on "20 Baltimore Avenue" in Rehoboth Beach;
-- out-of-state venues are matched by full name, not by generic words, so
-  "Washington Street Ale House" and "Delaware Public Media" survive while
-  "Longwood Gardens" (Kennett Square PA) does not.
+The model layer resolves in order, so the pipeline runs regardless of what is
+available:
 
-Fields are evaluated independently, since concatenating them moves the state
-position onto whichever field comes last. The Delaware municipality list is
-consulted before the out-of-state list, so names shared with other states
-(Newark, Camden, Milford, Dover) resolve to Delaware unless an address
-explicitly says otherwise, and a leading `19` in a ZIP does not mean Delaware
-(Avondale PA is 19311, Kennett Square is 19348).
-Events with no location evidence are **kept**, not guessed — every source is a
-Delaware organization, so a missing address is not evidence of absence. The LLM
-relevance gate independently screens descriptions for out-of-state events, so
-the two layers back each other up.
+1. **Anthropic SDK** — set `ANTHROPIC_API_KEY`, or log in with `ant auth login`
+2. **Claude CLI** — headless `claude -p`, picked up automatically if installed
+3. **Keyword rules** — deterministic fallback; no extraction from unstructured
+   HTML, but every other stage still works end to end
 
-## What reaches the workbook
+Force one with `SCENESCOUT_LLM=anthropic|claude-cli|rules`. A failed AI call
+never silently downgrades the run: extraction raises rather than reporting
+"found nothing", and a failed pull never deletes data it had already stored.
 
-The import workbook is what staff bulk-upload, so it holds only
-confirmed-relevant Delaware events. Everything else is accounted for in
-`out/review-report.html` rather than dropped silently:
+## 9. Delaware only
+
+Several sources legitimately program out of state — the Delaware Academy of
+Vocal Arts performs in Philadelphia and New York, and the Delaware Nature
+Society runs programs at a preserve in Avondale, PA. `geo.py` drops those.
+
+Every check is anchored to a *position* in the address rather than matched as a
+substring, because the two collide constantly in real data:
+
+- a state token must be the last comma-separated element — otherwise
+  "3120 Barley Mill Rd, **Mt.** Cuba, DE 19807" reads as Montana;
+- a ZIP must follow a state or end the string — Sussex addresses have five-digit
+  house numbers like "15411 Abbotts Pond Road";
+- localities are compared as whole segments — Clear Space Theatre is on
+  "20 Baltimore Avenue" in Rehoboth Beach and belongs on the calendar;
+- a leading `19` is not Delaware (Avondale PA is 19311, Kennett Square 19348).
+
+Names shared with other states — Newark, Camden, Milford, Dover — resolve to
+Delaware unless an address says otherwise, and an event with no location
+evidence is kept rather than guessed, since every source is a Delaware
+organization.
+
+## 10. What reaches the workbook
+
+The workbook holds only confirmed-relevant Delaware events, because staff
+bulk-upload it directly. Everything else is accounted for in the review report
+rather than dropped silently:
 
 | Outcome | Where it goes |
 |---|---|
 | Confirmed relevant, not already listed | the `.xlsx` workbook |
-| Venue not in the DelawareScene directory, or a low-confidence venue match | in the workbook, flagged `NEEDS-DIRECTORY-ENTRY` / `CHECK-VENUE` |
-| Already on DelawareScene | suppressed, listed under "Suppressed as already listed" |
-| Close-but-not-certain match to an existing listing | held out, listed under "Borderline scene matches" |
-| An arts hint, but not enough to be sure | held out, listed under "Uncertain relevance" |
-| Outside Delaware | excluded, listed under "Excluded as outside Delaware" |
-| Already finished | held out, listed under "Past events" |
-| No arts signal at all | filtered out (counted in the report header) |
+| Venue missing from the directory, or a low-confidence match | in the workbook, flagged `NEEDS-DIRECTORY-ENTRY` / `CHECK-VENUE` |
+| Already on DelawareScene | suppressed, listed under "Suppressed as duplicates" |
+| Close-but-not-certain match to a listing | held out, under "Borderline scene matches" |
+| An arts hint, but not enough to be sure | held out, under "Uncertain relevance" |
+| Outside Delaware | excluded, under "Excluded as outside Delaware" |
+| Already finished | held out, under "Past events" |
+| No arts signal at all | filtered (counted in the report header) |
 
-Relevance is decided in this order, cheapest evidence first: a disqualifying
-word in the *title* rejects; the source's own tags decide where they are
-reliable (LibCal labels every library event); a category word in the title
-admits; anything with a weaker hint goes to the LLM, and to a human if the
-budget is spent; anything with no arts signal at all is filtered. If the LLM
-budget runs out before those calls are made, the report says how many events
-that affected — the budget should never be a silent arbiter.
+Relevance is decided cheapest-evidence-first: a disqualifying word in the
+*title* rejects; the source's own tags decide where they are reliable; a
+category word in the title admits; anything weaker goes to the model, and to a
+human if the budget is spent.
 
-## Tests
-
-`tests/test_pipeline.py` covers parsing, the Delaware gate, keyword
-classification, dedup, and export validation — no network, no LLM. Almost every
-test encodes a specific bug an adversarial code review found, so the file
-doubles as documentation of the cases that are easy to get wrong:
-
-- a street called "Baltimore Avenue" in Rehoboth Beach is not Maryland, and
-  "Mt. Cuba, DE" is not Montana;
-- "Free for members, $10 general" is a ticketed event, and "$0 to $43.98"
-  keeps its ceiling;
-- "art" must match "arts", and "pop-up" must not mean Rock/Pop;
-- a matinee and an evening show on the same day are two events, and "3rd Grade
-  Art Show" is not "4th Grade Art Show";
-- "Lincoln Theatre" must survive venue-name normalization that strips "Inc".
+## 11. Tests
 
 ```bash
-.venv/bin/python tests/test_pipeline.py      # or: python -m pytest tests/ -q
+.venv/bin/python tests/test_pipeline.py     # or: python -m pytest tests/ -q
 ```
 
-## Mock upload portal
+37 tests, no network and no AI. Nearly every one encodes a defect an
+adversarial code review found, so the file doubles as documentation of the
+cases that are easy to get wrong:
 
-A small Flask app that mimics the DelawareScene intake, in two pages.
+- "20 Baltimore Avenue, Rehoboth Beach" is Delaware; "Mt. Cuba, DE" is not Montana
+- "Free for members, $10 general" is ticketed, and "$0 to $43.98" keeps its ceiling
+- "art" must match "arts"; "pop-up" must not mean Rock/Pop
+- a matinee and an evening show on the same day are two events
+- story time filed under "Arts and Crafts" is still out of scope
 
-```bash
-.venv/bin/python mock_site/app.py   # http://127.0.0.1:5050
-```
+## 12. Known limitations
 
-The calendar is **persistent and pre-seeded**. On first run it loads
-`assets/DelawareScene Currently Listed Events.xlsx` — the 700 events already on
-DelawareScene — so the site has real content before you upload anything.
-Uploads merge into that same calendar, and the combined result is written to
-`out/delawarescene-calendar.xlsx` after every upload, so one file holds the
-existing listings and everything SceneScout found, together.
-
-**`/` — bulk upload.** Drop in `out/scenescout-export-YYYYMMDD.xlsx`. Every row
-is validated against the DDOA submission guidelines (date and time formats,
-phone and price rules, at most three categories with no parent+child pair,
-200-word descriptions). Multi-performance continuation rows are reassembled
-onto their parent production first, exactly as the real importer would, so a
-skeleton row is not rejected for "missing title".
-
-Then each event is checked against the *whole* calendar — DelawareScene's own
-listings and everything uploaded before — using the same matcher the pipeline's
-dedupe stage uses. Uploading the same workbook twice adds nothing the second
-time; the skipped events are listed so you can see what matched. Rejected rows
-are reported with the reason.
-
-**`/calendar` — the calendar.** Month, week, and day views over everything
-uploaded, with:
-
-- events coloured by discipline (music, theater, visual arts, dance, film,
-  literature, festivals, lectures, kids), subcategories inheriting the parent
-  colour, so a jazz gig and a choral concert read alike at a glance;
-- a clickable legend that filters by discipline — active chips are filled with
-  their own colour so the legend doubles as the colour key, inactive ones go
-  hollow and grey, plus show-all / hide-all shortcuts (every chip clears WCAG
-  AA contrast, minimum 5.4:1);
-- a title/venue search;
-- multi-day exhibits shown on every day of their run, and all-day events
-  separated from timed ones;
-- overlapping events at the same hour sharing the column width instead of
-  hiding each other;
-- VenueIDs resolved back to organization names from the scraped DelawareScene
-  directory, since the workbook carries only IDs;
-- an **All / Already listed / Found by SceneScout** filter, with events the
-  pipeline contributed marked by a doubled left border, so you can see at a
-  glance what SceneScout added to what was already there;
-- click any event for its full detail — dates, admission, categories, VenueID,
-  source link, and whether it was already listed or newly found.
-
-Keyboard: `←`/`→` to move, `t` for today.
-
-## Repository structure
-
-- `scenescout/` — the pipeline package
-  - `db.py` schema · `http.py` polite fetching (rate limits, robots, cache,
-    curl fallback) · `registry.py` source registry + route auto-detection
-  - `scene.py` DelawareScene scrapers (org directory → VenueIDs, day listings)
-  - `extract/` per-route workers (tribe REST, LibCal, Squarespace, ICS, RSS,
-    WP CPT, JSON-LD, HTML→LLM)
-  - `normalize.py` canonical schema + tiered relevance/category classification
-  - `geo.py` Delaware-only gate (see below)
-  - `dedupe.py` self-dedup + fuzzy match against DelawareScene listings
-  - `export.py` 13-column bulk-upload workbook + validators + review report
-  - `llm.py` Claude backends (SDK / CLI / rules fallback)
-- `mock_site/` — mock DelawareScene upload portal
-- `assets/` — source list (`websites.csv`), DDOA templates and exports
-- `out/` — generated export + `review-report.html`
-- `web_search_scripts/`, `url_lists/` — legacy DuckDuckGo discovery scripts
-  (kept for the source-discovery stretch goal)
-
-## Known limitations
-
-- 5 sources are bot-blocked or fully client-rendered (OperaDelaware/CueBox,
-  Wilmington WAF, Theatre N, Schwartz Center, Inner City Cultural League) —
-  marked `headless` and deferred; their events partly surface via aggregators.
-- 2 source URLs in websites.csv are dead (Delaware Historical Society,
-  UD Arts) — candidates for the search-based rediscovery stretch goal.
-- Rules-only classification is conservative; the LLM backends materially
-  improve category quality on the unstructured tail.
+- **Six sources are unreachable.** Five are bot-blocked or fully client-rendered
+  (OperaDelaware behind Cloudflare, wilmingtonde.gov behind a WAF, Theatre N,
+  Schwartz Center, Inner City Cultural League) and one URL is dead. A headless
+  browser would close most of this.
+- **Venue directory coverage.** 402 of 637 productions resolve to a
+  DelawareScene VenueID; the rest are flagged `NEEDS-DIRECTORY-ENTRY` because
+  the organization is not in the directory yet — a real step in DDOA's workflow.
+- **Source discovery** (finding venues not already in `assets/websites.csv`)
+  remains a stretch goal; `rediscover` currently only repairs known sources.

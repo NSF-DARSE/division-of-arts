@@ -221,3 +221,7 @@ __marimo__/
 data/
 out/
 assets/*(1)*
+
+# legacy scraper output
+subpage_list.txt
+web_data/
