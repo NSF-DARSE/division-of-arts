@@ -14,6 +14,12 @@ schema.org JSON-LD) — those are extracted deterministically. The LLM does what
 only it can: reading the genuinely unstructured tail, judging arts-and-culture
 relevance, and assigning DelawareScene category IDs.
 
+## Presentation
+
+`docs/presentation.html` is the seven-minute talk — open it in a browser. Eight
+full-screen sections with timing markers, a pipeline flow diagram, and the
+measured results from a live run.
+
 ## Running it
 
 Everything below assumes you are in the repository root. Nothing needs a
