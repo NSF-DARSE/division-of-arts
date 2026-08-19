@@ -31,19 +31,23 @@ architecture and the decision record.
 Python 3.9 or newer. No database server, no API key required.
 
 ```bash
-git clone --recurse-submodules https://github.com/talhaMah56/division-of-arts
+git clone https://github.com/talhaMah56/division-of-arts
 cd division-of-arts
+git submodule update --init          # the companion frontend; see the note
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-`--recurse-submodules` matters: the companion web frontend
+The second line matters: the companion web frontend
 (`DODA-AI-Companion-2026-Hennovate`) is a submodule, and a plain clone leaves
-that directory empty. If you already cloned without it:
+that directory empty. Nothing in the pipeline or the site needs it, so skip it
+if you only want SceneScout to run.
 
-```bash
-git submodule update --init --recursive
-```
+> Init it **without `--recursive`**, and do not use `git clone
+> --recurse-submodules`. The two repositories declare each other as submodules,
+> so recursing walks the cycle and clones both again one level down. Fixing that
+> properly means dropping the `division-of-arts` submodule from the frontend
+> repository, which lives outside this one.
 
 If `lxml` fails to build on macOS, run `xcode-select --install` and retry.
 
