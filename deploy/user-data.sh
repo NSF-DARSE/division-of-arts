@@ -11,7 +11,10 @@ APP=/opt/scenescout
 dnf -y install git python3 python3-pip
 
 rm -rf "$APP"
-git clone --recurse-submodules --branch "$BRANCH" --depth 1 "$REPO" "$APP"
+# No --recurse-submodules: the site does not use the companion frontend, and
+# recursing would make every deploy depend on that separate repo staying
+# reachable.
+git clone --branch "$BRANCH" --depth 1 "$REPO" "$APP"
 cd "$APP"
 
 python3 -m venv .venv
