@@ -38,8 +38,8 @@ python3 -m venv .venv
 ```
 
 `--recurse-submodules` matters: the companion web frontend
-(`DODA-AI-Companion-2026-Hennovate`, hosted on AWS) is a submodule, and a plain
-clone leaves that directory empty. If you already cloned without it:
+(`DODA-AI-Companion-2026-Hennovate`) is a submodule, and a plain clone leaves
+that directory empty. If you already cloned without it:
 
 ```bash
 git submodule update --init --recursive
@@ -157,11 +157,21 @@ The site is a working stand-in for DDOA's intake, in two pages.
 Everything you upload is written back to `out/delawarescene-calendar.xlsx`, so
 one file holds the existing listings and everything SceneScout found, together.
 
-## 6. Putting the site on AWS
+## 6. Running the site on AWS
 
-The pipeline is a batch job and stays on a laptop; what is worth hosting is the
-site, so anyone with the link can browse the calendar. `deploy/` runs the site
-on a single EC2 instance — no container registry, no IAM roles, no Docker.
+**The site runs on AWS.** The pipeline is a batch job and stays on a laptop —
+it needs no server — but the calendar is worth hosting so anyone with the link
+can browse what SceneScout found. `deploy/` puts it on a single EC2 instance
+with no container registry, no IAM roles, and no Docker.
+
+To find the URL of a running deployment:
+
+```bash
+aws ec2 describe-instances \
+  --filters Name=tag:Name,Values=scenescout-demo \
+            Name=instance-state-name,Values=running \
+  --query 'Reservations[].Instances[].PublicIpAddress' --output text
+```
 
 From anywhere that already has AWS credentials — CloudShell, a workshop VS Code
 or desktop instance, an EC2 box with a role — it is one command:

@@ -450,9 +450,9 @@
   <div class="wide">
     <p class="eyebrow">Demo &amp; adoption<span class="time">4:45</span></p>
     <h2>DDOA could run this next week</h2>
-    <p class="lede">We built a working mock of DelawareScene's intake, so the whole
-      loop is demonstrable rather than described — and the output drops straight into
-      the process they already have.</p>
+    <p class="lede">We built a working mock of DelawareScene's intake and put it on
+      AWS, so the whole loop is demonstrable rather than described — and the output
+      drops straight into the process they already have.</p>
     <div class="two">
       <div class="card">
         <h4>It fits the existing process</h4>
@@ -475,6 +475,19 @@
         <p>Every stage is idempotent and checkpointed, designed as a nightly job that
           emails staff a workbook and a review report. 78% of events cost nothing but
           bandwidth.</p>
+      </div>
+      <div class="card">
+        <h4>Running on AWS</h4>
+        <p>The site is deployed to EC2 by a script that resolves the VPC and current
+          AMI at run time and boots gunicorn under systemd — so the demo is a URL, not
+          a laptop. The pipeline stays a batch job; only what people read is hosted.</p>
+      </div>
+      <div class="card">
+        <h4>What deploying taught us</h4>
+        <p>Running somewhere clean exposed what a laptop had been hiding: the site
+          silently depended on the pipeline's local database for venue names, and two
+          web workers raced to seed the same SQLite file. Both are cheap to fix once
+          and invisible until you leave your own machine.</p>
       </div>
     </div>
     <div class="pull">
