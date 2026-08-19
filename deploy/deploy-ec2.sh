@@ -34,7 +34,22 @@ if [[ "${1:-}" == "--terminate" ]]; then
   exit 0
 fi
 
+command -v aws >/dev/null || {
+  echo "aws CLI not found on PATH." >&2; exit 1; }
+who=$(aws sts get-caller-identity --query Arn --output text 2>&1) || {
+  cat >&2 <<MSG
+No usable AWS credentials for $REGION.
+
+  - already on an AWS machine?  check its instance role
+  - laptop, no credentials?     ./deploy/aws-sso-login.sh
+  - have a profile?             AWS_PROFILE=<name> $0
+
+$who
+MSG
+  exit 1; }
+
 say "region $REGION · instance $TYPE · name $NAME"
+say "as $who"
 
 VPC=$(aws ec2 describe-vpcs --filters Name=is-default,Values=true \
       --query 'Vpcs[0].VpcId' --output text)
