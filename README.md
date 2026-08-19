@@ -16,13 +16,32 @@ hands staff a workbook in the exact bulk-upload format DDOA already uses.
 On the most recent run: **2,272 events pulled → 991 net-new events**, accepted by
 the upload validator with zero errors.
 
+### ▸ Live on AWS: **http://52.200.50.241**
+
+The calendar holds **1,616 events** — the 660 DelawareScene already lists plus
+the 956 SceneScout found. [`/calendar`](http://52.200.50.241/calendar) is the
+one to look at; filter by *Found by SceneScout* to see only what it contributed.
+
+> A demo instance, so it is plain HTTP and the address is the machine's public
+> IP — replacing the instance changes it. [§6](#6-running-the-site-on-aws) has
+> how to redeploy and how to look the current address up.
+
 > **The design in one line:** most of these sites already publish
 > machine-readable events, so 78% of the data is extracted deterministically and
 > the AI is spent only where structure runs out — reading the unstructured tail,
 > judging what belongs on an arts calendar, and assigning categories.
 
-`docs/presentation.html` is the seven-minute talk. [PLAN.md](PLAN.md) has the
-architecture and the decision record.
+`docs/presentation.html` is the seven-minute talk, with every slide exported to
+`docs/slides/*.png` (2880×1800) for submission or for pasting into other deck
+software. Re-export after editing the talk:
+
+```bash
+./docs/export-slides.sh          # SCALE=1 for 1440x900
+```
+
+It screenshots the real slides headlessly rather than redrawing them, so the
+images cannot drift from the deck. [PLAN.md](PLAN.md) has the architecture and
+the decision record.
 
 ---
 
@@ -163,12 +182,12 @@ one file holds the existing listings and everything SceneScout found, together.
 
 ## 6. Running the site on AWS
 
-**The site runs on AWS.** The pipeline is a batch job and stays on a laptop —
-it needs no server — but the calendar is worth hosting so anyone with the link
-can browse what SceneScout found. `deploy/` puts it on a single EC2 instance
-with no container registry, no IAM roles, and no Docker.
+**The site runs on AWS at http://52.200.50.241.** The pipeline is a batch job
+and stays on a laptop — it needs no server — but the calendar is worth hosting
+so anyone with the link can browse what SceneScout found. `deploy/` puts it on
+a single EC2 instance with no container registry, no IAM roles, and no Docker.
 
-To find the URL of a running deployment:
+To look up the address of a running deployment:
 
 ```bash
 aws ec2 describe-instances \

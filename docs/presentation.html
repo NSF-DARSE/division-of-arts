@@ -440,7 +440,7 @@
       <div><b>991</b><span>rows accepted by the upload validator — 0 errors</span></div>
       <div><b>162</b><span>events suppressed as already listed — the staff time saved</span></div>
       <div><b>0</b><span>events left undecided by a budget instead of a classifier</span></div>
-      <div><b>37</b><span>regression tests, no network or AI required</span></div>
+      <div><b>38</b><span>regression tests, no network or AI required</span></div>
     </div>
   </div>
 </section>
@@ -477,10 +477,11 @@
           bandwidth.</p>
       </div>
       <div class="card">
-        <h4>Running on AWS</h4>
-        <p>The site is deployed to EC2 by a script that resolves the VPC and current
-          AMI at run time and boots gunicorn under systemd — so the demo is a URL, not
-          a laptop. The pipeline stays a batch job; only what people read is hosted.</p>
+        <h4>Running on AWS — <span style="color:var(--buff)">52.200.50.241</span></h4>
+        <p>Deployed to EC2 by a script that resolves the VPC and current AMI at run
+          time and boots gunicorn under systemd — so the demo is a URL, not a laptop.
+          It serves all 1,616 events. The pipeline stays a batch job; only what people
+          read is hosted.</p>
       </div>
       <div class="card">
         <h4>What deploying taught us</h4>
@@ -533,7 +534,7 @@
     <div class="stats" style="margin-top:1.8rem">
       <div><b>991</b><span>net-new events in DDOA's own upload format</span></div>
       <div><b>1,616</b><span>events on the combined calendar we hand back</span></div>
-      <div><b>37</b><span>regression tests · one command to run it all</span></div>
+      <div><b>38</b><span>regression tests · one command to run it all</span></div>
       <div><b>0</b><span>out-of-state events · 0 left undecided</span></div>
     </div>
 
