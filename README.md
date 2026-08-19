@@ -103,7 +103,7 @@ Maintenance and tests:
 ```bash
 python -m scenescout rediscover          # propose URLs for sources whose site moved
 python -m scenescout rediscover --apply  # write back only page-verified matches
-python tests/test_pipeline.py            # 37 regression tests, no network, no AI
+python tests/test_pipeline.py            # 38 regression tests, no network, no AI
 ```
 
 ## 4. Loading results into the site
@@ -157,7 +157,69 @@ The site is a working stand-in for DDOA's intake, in two pages.
 Everything you upload is written back to `out/delawarescene-calendar.xlsx`, so
 one file holds the existing listings and everything SceneScout found, together.
 
-## 6. What you end up with
+## 6. Putting the site on AWS
+
+The pipeline is a batch job and stays on a laptop; what is worth hosting is the
+site, so anyone with the link can browse the calendar. `deploy/` runs the site
+on a single EC2 instance — no container registry, no IAM roles, no Docker.
+
+From anywhere that already has AWS credentials — CloudShell, a workshop VS Code
+or desktop instance, an EC2 box with a role — it is one command:
+
+```bash
+./deploy/deploy-ec2.sh          # prints the URL once the site answers
+```
+
+From a laptop with no credentials, sign in first:
+
+```bash
+./deploy/aws-sso-login.sh                  # writes a short-lived 'kiro' profile
+AWS_PROFILE=kiro ./deploy/deploy-ec2.sh
+```
+
+That script uses the OIDC **device flow**: it prints a URL and a code, you
+approve them in any browser, and it writes temporary keys to `~/.aws/credentials`.
+Nothing is stored in the repository, and the keys expire — rerun it to refresh.
+Point it at a different tenant with `SSO_START_URL=... SSO_REGION=...`.
+
+> An **Identity Center login is not automatically AWS account access.** A Kiro
+> Pro start URL, for instance, authenticates the IDE subscription and returns an
+> empty account list — the script says so and stops rather than failing
+> obscurely. Deploy from a machine that already holds credentials instead.
+
+`deploy-ec2.sh` finds the default VPC, reuses or creates a security group
+opening port 80, resolves the current Amazon Linux 2023 AMI from SSM, and
+launches a `t3.small` that clones this repository on boot
+(`deploy/user-data.sh`), installs `deploy/requirements-site.txt`, and runs
+gunicorn under systemd. **It deploys whatever is on GitHub, so push first.**
+Re-running replaces the instance rather than adding another.
+
+```bash
+AWS_PROFILE=kiro ./deploy/deploy-ec2.sh --terminate   # tear it down
+AWS_REGION=us-west-2 SCENESCOUT_INSTANCE_TYPE=t3.micro ./deploy/deploy-ec2.sh
+```
+
+A deployed instance sets `SCENESCOUT_PRELOAD=1`, which ingests
+`assets/scenescout-export.xlsx` on first boot through the same code path an
+upload takes — so the hosted calendar opens with all 1,616 events rather than
+only the 660 DelawareScene already lists. It is off locally, so `python
+mock_site/app.py` still starts from DelawareScene's own data and leaves you
+something to demonstrate on the upload page.
+
+If the site does not answer, read the boot log without needing an SSH key:
+
+```bash
+aws ec2 get-console-output --instance-id <id> --output text | tail -40
+```
+
+There is also a `Dockerfile` for App Runner, ECS, or Lightsail. It serves the
+same app on `$PORT` (default 8080); the EC2 path above needs none of it.
+
+> Port 80 is plain HTTP and the security group is open to the internet, which
+> suits a short-lived demo and nothing else. The site has no login and accepts
+> file uploads from anyone who finds it, so terminate it when you are done.
+
+## 7. What you end up with
 
 | File | What it is |
 |---|---|
@@ -171,7 +233,7 @@ one file holds the existing listings and everything SceneScout found, together.
 To start over, delete `data/` for a clean pipeline run, or just
 `data/mock_site.db` to reset the calendar to DelawareScene's listings.
 
-## 7. Repository layout
+## 8. Repository layout
 
 ```
 scenescout/            the pipeline
@@ -186,13 +248,16 @@ scenescout/            the pipeline
   llm.py               AI backends and the deterministic keyword fallback
   rediscover.py        replacement URLs for sources whose site moved
 mock_site/app.py       upload portal + calendar
-tests/                 37 regression tests
+wsgi.py                gunicorn entry point (seeds once, before workers fork)
+deploy/                aws-sso-login.sh, deploy-ec2.sh, user-data.sh, slim deps
+Dockerfile             same app as a container, for App Runner / ECS / Lightsail
+tests/                 38 regression tests
 assets/                curated source registry and DDOA templates/exports
 docs/                  the presentation and the original case-study brief
 prototypes/            early exploration, superseded (see its README)
 ```
 
-## 8. How the extraction works
+## 9. How the extraction works
 
 Each source is probed once and routed to the cheapest channel that actually
 works. Structured channels are parsed exactly; only what is left goes to a model.
@@ -225,7 +290,7 @@ Force one with `SCENESCOUT_LLM=anthropic|claude-cli|rules`. A failed AI call
 never silently downgrades the run: extraction raises rather than reporting
 "found nothing", and a failed pull never deletes data it had already stored.
 
-## 9. Delaware only
+## 10. Delaware only
 
 Several sources legitimately program out of state — the Delaware Academy of
 Vocal Arts performs in Philadelphia and New York, and the Delaware Nature
@@ -247,7 +312,7 @@ Delaware unless an address says otherwise, and an event with no location
 evidence is kept rather than guessed, since every source is a Delaware
 organization.
 
-## 10. What reaches the workbook
+## 11. What reaches the workbook
 
 The workbook holds only confirmed-relevant Delaware events, because staff
 bulk-upload it directly. Everything else is accounted for in the review report
@@ -269,13 +334,13 @@ Relevance is decided cheapest-evidence-first: a disqualifying word in the
 category word in the title admits; anything weaker goes to the model, and to a
 human if the budget is spent.
 
-## 11. Tests
+## 12. Tests
 
 ```bash
 .venv/bin/python tests/test_pipeline.py     # or: python -m pytest tests/ -q
 ```
 
-37 tests, no network and no AI. Nearly every one encodes a defect an
+38 tests, no network and no AI. Nearly every one encodes a defect an
 adversarial code review found, so the file doubles as documentation of the
 cases that are easy to get wrong:
 
@@ -285,7 +350,7 @@ cases that are easy to get wrong:
 - a matinee and an evening show on the same day are two events
 - story time filed under "Arts and Crafts" is still out of scope
 
-## 12. Known limitations
+## 13. Known limitations
 
 - **Six sources are unreachable.** Five are bot-blocked or fully client-rendered
   (OperaDelaware behind Cloudflare, wilmingtonde.gov behind a WAF, Theatre N,

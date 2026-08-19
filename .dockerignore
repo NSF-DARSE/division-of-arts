@@ -1,0 +1,10 @@
+.git
+.venv
+data
+out
+docs
+tests
+prototypes
+DODA-AI-Companion-2026-Hennovate
+**/__pycache__
+*.pyc

@@ -9,6 +9,7 @@ uses, and render accepted events as a DelawareScene-style calendar list.
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 import sys
@@ -591,6 +592,8 @@ def _coerce_cell(key, value):
 
 
 SEED_XLSX = ROOT / "assets" / "DelawareScene Currently Listed Events.xlsx"
+DEMO_XLSX = ROOT / "assets" / "scenescout-export.xlsx"
+VENUES_CSV = ROOT / "assets" / "delawarescene-venues.csv"
 COMBINED_XLSX = ROOT / "out" / "delawarescene-calendar.xlsx"
 COMBINED_HEADERS = ["Title", "Venue", "Venue ID", "Categories", "Start Date",
                     "Start Time", "End Date", "Admission", "URL", "Source"]
@@ -663,6 +666,25 @@ def _seed(conn):
         write_combined(conn)
         note = f" ({collapsed} duplicate rows in the source export collapsed)" if collapsed else ""
         print(f"[mock_site] seeded {n} events already listed on DelawareScene{note}")
+    _preload(conn)
+
+
+def _preload(conn):
+    """Optionally ingest a shipped pipeline export on first boot.
+
+    A deployed demo has nobody to upload a workbook, and a calendar showing
+    only what DelawareScene already lists would hide the entire contribution.
+    Off by default so a local run still starts from DelawareScene's own data
+    and the upload page has something to demonstrate.
+    """
+    if os.environ.get("SCENESCOUT_PRELOAD", "").lower() not in ("1", "true", "yes"):
+        return
+    if not DEMO_XLSX.exists():
+        print(f"[mock_site] SCENESCOUT_PRELOAD set but {DEMO_XLSX.name} is missing")
+        return
+    accepted, errors, duplicates = ingest_workbook(conn, DEMO_XLSX, _venue_names())
+    print(f"[mock_site] preloaded {accepted} events SceneScout found "
+          f"({len(duplicates)} already listed, {len(errors)} rejected)")
 
 
 def _now():
@@ -787,17 +809,29 @@ def find_duplicate(conn, title, venue, start_iso, end_iso, venues):
 def _venue_names():
     """VenueID -> organization name, from the DelawareScene directory the
     pipeline scraped. The workbook carries only IDs, as the real importer
-    expects, so the calendar resolves them for display."""
+    expects, so the calendar resolves them for display.
+
+    Falls back to the directory snapshot committed alongside the site, so a
+    fresh clone or a deployed instance still shows venue names without having
+    run the pipeline first.
+    """
     scene_db = ROOT / "data" / "scenescout.db"
-    if not scene_db.exists():
+    if scene_db.exists():
+        try:
+            c = sqlite3.connect(f"file:{scene_db}?mode=ro", uri=True)
+            rows = c.execute("SELECT scene_id, name FROM scene_orgs").fetchall()
+            c.close()
+            if rows:
+                return {str(sid): name for sid, name in rows}
+        except sqlite3.Error:
+            pass
+    if not VENUES_CSV.exists():
         return {}
-    try:
-        c = sqlite3.connect(f"file:{scene_db}?mode=ro", uri=True)
-        rows = c.execute("SELECT scene_id, name FROM scene_orgs").fetchall()
-        c.close()
-        return {str(sid): name for sid, name in rows}
-    except sqlite3.Error:
-        return {}
+    import csv
+
+    with VENUES_CSV.open(encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        return {r["venue_id"]: r["name"] for r in reader if r.get("venue_id")}
 
 
 def _iso_date(value):
@@ -851,17 +885,19 @@ def index():
                                   summary=summary, duplicates=[], dup_total=0)
 
 
-@app.post("/upload")
-def upload():
-    conn = _db()
-    venues = _venue_names()
-    f = request.files.get("file")
+def ingest_workbook(conn, source, venues):
+    """Merge a 13-column bulk-upload workbook into the calendar.
+
+    Shared by the upload route and the boot-time preload, so a deployed demo
+    ingests results through exactly the code path a real upload takes.
+    Returns (accepted, errors, duplicates).
+    """
     errors, accepted, duplicates = [], 0, []
-    if not f:
+    if not source:
         errors.append("no file")
     else:
         try:
-            wb = load_workbook(f, read_only=True)
+            wb = load_workbook(source, read_only=True)
             ws = wb.active
             rows = ws.iter_rows(values_only=True)
             header = [str(h).strip() if h else "" for h in next(rows)]
@@ -933,6 +969,15 @@ def upload():
                 write_combined(conn)
         except Exception as e:  # noqa: BLE001
             errors.append(f"could not read workbook: {e}")
+    return accepted, errors, duplicates
+
+
+@app.post("/upload")
+def upload():
+    conn = _db()
+    accepted, errors, duplicates = ingest_workbook(
+        conn, request.files.get("file"), _venue_names()
+    )
     total = conn.execute("SELECT COUNT(*) c FROM mock_listings").fetchone()["c"]
     summary = None
     if accepted or errors or duplicates:
@@ -956,4 +1001,6 @@ def clear():
 
 
 if __name__ == "__main__":
-    app.run(port=5050, debug=False)
+    # 127.0.0.1 locally; a container/instance must bind 0.0.0.0 to be reachable.
+    app.run(host=os.environ.get("HOST", "127.0.0.1"),
+            port=int(os.environ.get("PORT", "5050")), debug=False)

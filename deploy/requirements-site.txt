@@ -1,0 +1,8 @@
+# Just what mock_site/app.py needs to serve the calendar and validate uploads.
+# The full pipeline (requirements.txt) also pulls scrapers, feed parsers, the
+# Anthropic SDK and Sphinx — none of which a deployed demo runs.
+flask
+gunicorn
+openpyxl
+python-dateutil
+rapidfuzz

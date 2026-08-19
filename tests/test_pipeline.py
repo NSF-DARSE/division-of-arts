@@ -292,6 +292,31 @@ def test_formatters_match_the_submission_guidelines():
     assert len(capped.split()) <= 200 and capped.endswith("…")
 
 
+# ------------------------------------------------------------- deployed site
+def test_venue_names_fall_back_to_the_shipped_directory():
+    # data/scenescout.db is gitignored, so a fresh clone — and every deployed
+    # instance — had no venue names at all: uploads showed a blank venue for
+    # every row. The committed directory snapshot is the fallback.
+    import pathlib
+    import tempfile
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, os.path.join(root, "mock_site"))
+    import app as mock_site
+
+    real_root = mock_site.ROOT
+    try:
+        # A directory with no data/scenescout.db in it.
+        mock_site.ROOT = pathlib.Path(tempfile.mkdtemp())
+        names = mock_site._venue_names()
+    finally:
+        mock_site.ROOT = real_root
+
+    assert names, "no venue names without the pipeline database"
+    assert names["3"] == "Delaware Art Museum"
+    assert names["27"] == "The Grand Opera House"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
