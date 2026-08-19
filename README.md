@@ -37,7 +37,7 @@ that ddgs reports as `DDGSException: No results found.`. The script treats
 this (like timeouts and rate limits) as a transient failure and retries it up
 to `--retries` times, so a throttled site usually recovers on a later attempt.
 If a site still returns nothing, it is reported as an error rather than a
-result. Retrying a site list with `--retries 2` and a longer `--delay` (for
+result. The default is `--retries 2`; pairing it with a longer `--delay` (for
 example `--delay 8`) keeps these errors rare.
 
 If a site's server is slow to respond, raise the per-request connection timeout
@@ -80,6 +80,20 @@ To parse pages directly (standalone), pass URLs as arguments or on stdin:
     python web_search_scripts/web_parser.py "https://example.com" "https://example.org"
     python web_search_scripts/web_parser.py --db web_data/parsed_pages.db < urls.txt
 
+Read and search the parsed pages stored in the database:
+
+    python web_search_scripts/db_reader.py stats
+    python web_search_scripts/db_reader.py list
+    python web_search_scripts/db_reader.py list --filter theatre
+    python web_search_scripts/db_reader.py search "kids classes"
+    python web_search_scripts/db_reader.py show "https://arts.delaware.gov/"
+
+Save just the matching URLs (one per line) to a file instead of a console
+listing with `list` or `search`:
+
+    python web_search_scripts/db_reader.py list --filter theatre --output web_data/theatre_urls.txt
+    python web_search_scripts/db_reader.py search "gallery" --output web_data/gallery_urls.txt
+
 Each query must be approved (`y`/`N`) before any search is sent. Use
 `duck_search.py --help` for all options (result count, region, backend, retries,
 delays, exclude-keywords filtering, output format, page parsing, and more).
@@ -87,6 +101,7 @@ delays, exclude-keywords filtering, output format, page parsing, and more).
 ## Repository Structure
 - `web_search_scripts/` – source code (`duck_search.py`)
 - `web_search_scripts/web_parser.py` – fetches and parses webpages into SQLite
+- `web_search_scripts/db_reader.py` – reads and searches the parsed-pages SQLite DB
 - `url_lists/` – site lists used to restrict searches (`sites.txt`)
 - `web_data/` – search output files
 - `docs/` – optional documentation (Sphinx scaffold)

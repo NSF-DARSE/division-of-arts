@@ -186,7 +186,7 @@ def confirm_query(query: str, domains: list[str]) -> bool:
     ]
     if domains:
         lines.append(
-            f"Sites:  {len(domains)} (queried serially, one website at a time)"
+            f"Sites:  {len(domains)}"
         )
         for d in domains:
             lines.append(f"  - {d}")
@@ -389,75 +389,159 @@ def parse_results(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Search the web via DuckDuckGo and print results."
+        description=(
+            "Search the web via DuckDuckGo (ddgs) for arts organizations and "
+            "events, print the results, and optionally parse the result pages "
+            "into a SQLite database for later reading with db_reader.py."
+        ),
+        epilog=(
+            "examples:\n"
+            "  Plain search:\n"
+            '    python web_search_scripts/duck_search.py "Delaware arts events"\n'
+            "\n"
+            "  Restrict each query to a curated list of sites:\n"
+            '    python web_search_scripts/duck_search.py -s url_lists/sites.txt "Delaware arts"\n'
+            "\n"
+            "  Save results to a file, as JSON:\n"
+            '    python web_search_scripts/duck_search.py -j "Delaware arts" -o web_data/results.json\n'
+            "\n"
+            "  Drop stale results that mention 2025 or 2024:\n"
+            '    python web_search_scripts/duck_search.py -x 2025,2024 "Delaware arts events"\n'
+            "\n"
+            "  Fetch and parse result pages into the SQLite database:\n"
+            '    python web_search_scripts/duck_search.py "Delaware arts" --parse\n'
+            "\n"
+            "  See which search backends the installed ddgs provides:\n"
+            "    python web_search_scripts/duck_search.py --list-backends\n"
+            "\n"
+            "Run `duck_search.py --help` for all options (result count, region, "
+            "backend, retries, delays, exclude-keywords filtering, output format, "
+            "page parsing, and more)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("queries", nargs="*", help="Search query or queries")
+    parser.add_argument(
+        "queries",
+        nargs="*",
+        help=(
+            "One or more search queries. With --sites-file, each query is run "
+            "against every site in the file and results are grouped by site."
+        ),
+    )
     parser.add_argument(
         "-n", "--max-results", type=int, default=3,
-        help="Max results per site (default: 3)",
+        help="Maximum number of results to keep per site (default: 3)",
     )
     parser.add_argument(
         "-r", "--region", default="us-en",
-        help="DuckDuckGo region code (default: us-en)",
+        help=(
+            "DuckDuckGo region code used to localize results, e.g. us-en "
+            "(default: us-en); see the ddgs docs for supported codes"
+        ),
     )
     parser.add_argument(
         "-b", "--backend", default="auto",
-        help="Search engine backend (default: auto)",
+        help=(
+            "Search engine backend(s) as a comma-separated list, e.g. "
+            "gpt-4o or auto (default: auto). If a named backend is not "
+            "available, the script falls back to auto and warns on stderr; use "
+            "--list-backends to see what is available."
+        ),
     )
     parser.add_argument(
         "-x", "--exclude-keywords", action="append", default=None,
         metavar="KW",
-        help="Drop results whose title or snippet contains any of these keywords "
-             "(comma-separated; repeatable), e.g. -x 2025,2024",
+        help=(
+            "Drop results whose title or snippet contains any of these keywords. "
+            "Comma-separated and repeatable, e.g. -x 2025,2024 to remove "
+            "outdated event listings."
+        ),
     )
     parser.add_argument(
         "--verbose", action="store_true",
-        help="Show ddgs diagnostics (engine errors, backend fallbacks) on stderr",
+        help=(
+            "Show ddgs diagnostics -- engine errors and backend fallbacks -- on "
+            "stderr. Useful when a search fails or returns 'No results found.'"
+        ),
     )
     parser.add_argument(
         "--list-backends", action="store_true",
-        help="List the search backends available in the installed ddgs and exit",
+        help=(
+            "Print the text-search backends the installed ddgs actually provides "
+            "and exit."
+        ),
     )
     parser.add_argument(
         "-j", "--json", action="store_true",
-        help="Print results as JSON instead of plain text",
+        help="Emit results as JSON (each query/site as a structured record) "
+             "instead of plain text.",
     )
     parser.add_argument(
         "-s", "--sites-file", type=Path, default=None,
-        help="Text file with one site per line to restrict search to",
+        help=(
+            "Text file with one site per line, e.g. url_lists/sites.txt. Each "
+            "query is run as one 'site:' query per line in the file, and "
+            "results are grouped by website."
+        ),
     )
     parser.add_argument(
         "-o", "--output", type=Path, default=None,
-        help="Write results to this file instead of stdout",
+        help=(
+            "Write results to this file (plain text unless --json is given) "
+            "instead of stdout."
+        ),
     )
     parser.add_argument(
         "--delay", type=float, default=3.0,
-        help="Seconds to wait between site queries (default: 3.0)",
+        help=(
+            "Seconds to wait between site queries to avoid search-engine "
+            "throttling (default: 3.0). Raise it (e.g. --delay 8) when "
+            "sites keep getting throttled."
+        ),
     )
     parser.add_argument(
-        "--retries", type=int, default=1,
-        help="Retries per site for transient failures (timeout/rate limit) (default: 1)",
+        "--retries", type=int, default=2,
+        help=(
+            "Additional attempts per site for transient failures -- timeouts, "
+            "rate limits, and throttled 'No results found.' responses "
+            "(default: 2)."
+        ),
     )
     parser.add_argument(
         "--retry-delay", type=float, default=3.0,
-        help="Base seconds for retry backoff (default: 3.0)",
+        help=(
+            "Base seconds for the exponential backoff between retries "
+            "(default: 3.0)."
+        ),
     )
     parser.add_argument(
         "--timeout", type=int, default=60,
-        help="Per-request connection timeout in seconds (default: 60)",
+        help=(
+            "Per-request connection timeout in seconds (default: 60). Raise "
+            "this for slow servers."
+        ),
     )
     parser.add_argument(
         "--workers", type=int, default=None,
-        help="Number of sites to query in parallel "
-             "(default: system CPU count minus 4, capped at the number of sites)",
+        help=(
+            "Number of sites to query in parallel (default: system CPU count "
+            "minus 4, never below 1, capped at the number of sites)."
+        ),
     )
     parser.add_argument(
         "--parse", action="store_true",
-        help="Fetch and parse the resulting webpages, storing HTML and text in SQLite",
+        help=(
+            "After searching, fetch each result page, extract its readable text, "
+            "and store both the HTML and text in the parsed-pages SQLite "
+            "database."
+        ),
     )
     parser.add_argument(
         "--parse-db", type=Path, default=Path("web_data/parsed_pages.db"),
-        help="Path to the SQLite parsed-pages database (default: web_data/parsed_pages.db)",
+        help=(
+            "Path to the SQLite parsed-pages database written by --parse "
+            "(default: web_data/parsed_pages.db)."
+        ),
     )
     args = parser.parse_args()
 
