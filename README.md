@@ -31,10 +31,18 @@ architecture and the decision record.
 Python 3.9 or newer. No database server, no API key required.
 
 ```bash
-git clone https://github.com/talhaMah56/division-of-arts
+git clone --recurse-submodules https://github.com/talhaMah56/division-of-arts
 cd division-of-arts
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+```
+
+`--recurse-submodules` matters: the companion web frontend
+(`DODA-AI-Companion-2026-Hennovate`, hosted on AWS) is a submodule, and a plain
+clone leaves that directory empty. If you already cloned without it:
+
+```bash
+git submodule update --init --recursive
 ```
 
 If `lxml` fails to build on macOS, run `xcode-select --install` and retry.
